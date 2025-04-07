@@ -1,0 +1,161 @@
+#include "mbed.h"
+
+// Hall sensor inputs
+DigitalIn hallA(A0);
+DigitalIn hallB(A1);
+DigitalIn hallC(A2);
+
+// PWM outputs
+PwmOut A_H(D11);   // A high
+PwmOut A_L(D10);   // A low
+PwmOut B_H(D9);    // B high
+PwmOut B_L(D6);    // B low
+PwmOut C_H(D5);    // C high
+PwmOut C_L(D3);    // C low
+
+// ADC inputs
+AnalogIn overcurrent(A3);
+AnalogIn positionFeedback(A5);
+AnalogIn lightSensor(A4);
+
+// PWM parameters
+float dutyCycle = 0.0f;  // Start with 0 duty cycle to prevent initial acceleration
+const float pwmFreq = 10000.0f;
+const float pwmPeriod = 1.0f / pwmFreq;
+
+// Overcurrent threshold
+const float overcurrentThreshold = 0.35f;
+
+// Position control parameters
+const float Kp = 2.5f;  // Proportional gain
+const float Kd = 0.4f;  // Derivative gain
+float prevError = 0.0f;         
+float desiredPosition = 0.6f;
+
+
+
+
+// Function to disable all PWM outputs
+void disableAllPWMs() {
+    A_H.write(0.0f);
+    A_L.write(0.0f);
+    B_H.write(0.0f);
+    B_L.write(0.0f);
+    C_H.write(0.0f);
+    C_L.write(0.0f);
+}
+
+// Function to set PWM outputs based on hall sensor state and direction
+void commutate(bool direction) {
+    int hallState = (hallA.read() << 2) | (hallB.read() << 1) | (hallC.read());
+    disableAllPWMs();
+    
+    if (direction) {  // Forward rotation
+            switch (hallState) {
+        case 5:  // State 5: Hall sensors 1 0 1 → Activate A_L and B_H
+            A_L.write(dutyCycle);
+            B_H.write(dutyCycle);
+            break;
+
+        case 4:  // State 4: Hall sensors 1 0 0 → Activate B_H and C_L
+            B_H.write(dutyCycle);
+            C_L.write(dutyCycle);
+            break;
+
+        case 6:  // State 6: Hall sensors 1 1 0 → Activate A_H and C_L
+            A_H.write(dutyCycle);
+            C_L.write(dutyCycle);
+            break;
+
+        case 2:  // State 2: Hall sensors 0 1 0 → Activate A_H and B_L
+            A_H.write(dutyCycle);
+            B_L.write(dutyCycle);
+            break;
+
+        case 3:  // State 3: Hall sensors 0 1 1 → Activate B_L and C_H
+            B_L.write(dutyCycle);
+            C_H.write(dutyCycle);
+            break;
+
+        case 1:  // State 1: Hall sensors 0 0 1 → Activate A_L and C_H
+            A_L.write(dutyCycle);
+            C_H.write(dutyCycle);
+            break;
+
+        default:
+            // Invalid state (000 or 111) – no PWM signals are enabled.
+            break;
+            }
+    } else {  // Reverse rotation
+        switch (hallState) {
+        case 5:  // State 5: Hall sensors 1 0 1 → Activate A_H and B_L
+            A_H.write(dutyCycle);
+            B_L.write(dutyCycle);
+            break;
+
+        case 4:  // State 4: Hall sensors 1 0 0 → Activate B_L and C_H
+            B_L.write(dutyCycle);
+            C_H.write(dutyCycle);
+            break;
+
+        case 6:  // State 6: Hall sensors 1 1 0 → Activate A_L and C_H
+            A_L.write(dutyCycle);
+            C_H.write(dutyCycle);
+            break;
+
+        case 2:  // State 2: Hall sensors 0 1 0 → Activate A_L and B_H
+            A_L.write(dutyCycle);
+            B_H.write(dutyCycle);
+            break;
+
+        case 3:  // State 3: Hall sensors 0 1 1 → Activate B_H and C_L
+            B_H.write(dutyCycle);
+            C_L.write(dutyCycle);
+            break;
+
+        case 1:  // State 1: Hall sensors 0 0 1 → Activate A_H and C_L
+            A_H.write(dutyCycle);
+            C_L.write(dutyCycle);
+            break;
+
+        default:
+            // Invalid state (000 or 111) – no PWM signals are enabled.
+            break;
+    }
+    }
+}
+
+// PD Control loop
+void positionControl(bool &direction) {
+    float position = positionFeedback.read();  // Read position feedback (0 to 1)
+    float error = desiredPosition - position;
+    float derivative = (error - prevError);
+
+    
+    dutyCycle = Kp * fabs(error) + Kd * fabs(derivative);
+    dutyCycle = (dutyCycle > 1.0f) ? 1.0f : dutyCycle;  // Limit duty cycle
+    prevError = error;
+    direction = (error >= 0);
+}
+
+
+int main() {
+    A_H.period(pwmPeriod);
+    A_L.period(pwmPeriod);
+    B_H.period(pwmPeriod);
+    B_L.period(pwmPeriod);
+    C_H.period(pwmPeriod);
+    C_L.period(pwmPeriod);
+
+    bool direction = true;  // Default direction
+    
+    while (1) {
+        if (overcurrent.read() > overcurrentThreshold) {
+            disableAllPWMs();
+        } else {
+            positionControl(direction);
+            commutate(direction);
+        }
+        wait_ns(100); // 100ns delay for stability
+    }
+}
